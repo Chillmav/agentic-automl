@@ -1,2 +1,24 @@
 AGENTS.md
 pyproject.toml
+.venv
+.vscode
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+changes
+
+# Local datasets and experiment outputs
+/data/
+/results/
+*.joblib
+
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
