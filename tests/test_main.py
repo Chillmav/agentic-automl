@@ -32,7 +32,7 @@ def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -
     tables = main(data_dir=tmp_path)
     table = tables["example.csv"]
     assert isinstance(table, pd.DataFrame)
-    assert table.shape == (4, 4)
+    assert table.shape == (7, 12)
     assert table.attrs == {
         "positive_class": "1",
         "sample_rows": 40,
