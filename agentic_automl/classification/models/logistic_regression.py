@@ -1,24 +1,8 @@
 import pandas as pd
-from sklearn.base import BaseEstimator
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
-from agentic_automl.preprocessing import TabularPreprocessor
-
-
-def build_pipeline(
-    estimator: BaseEstimator, categorical_columns: list[str] | None = None
-) -> Pipeline:
-    """Attach shared preprocessing to an estimator; fitting happens separately."""
-    return Pipeline(
-        [
-            (
-                "preprocessor",
-                TabularPreprocessor(categorical_columns=categorical_columns),
-            ),
-            ("estimator", estimator),
-        ]
-    )
+from agentic_automl.preprocessing import build_pipeline
 
 
 def train_logistic_regression(

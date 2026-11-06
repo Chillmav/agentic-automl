@@ -2,11 +2,14 @@ import pandas as pd
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-from agentic_automl.data import stratified_split
-from agentic_automl.model import train_logistic_regression
+from agentic_automl.classification.data import stratified_split
+from agentic_automl.classification.models.knn import train_knn
+from agentic_automl.classification.models.logistic_regression import (
+    train_logistic_regression,
+)
 
 
-def compare_models(
+def compare_classification_models(
     features: pd.DataFrame,
     target: pd.Series,
     categorical_columns: list[str] | None = None,
@@ -32,6 +35,7 @@ def compare_models(
         "logistic_regression": train_logistic_regression(
             train_x, train_y, categorical_columns=categorical_columns
         ),
+        "knn": train_knn(train_x, train_y, categorical_columns=categorical_columns),
     }
     results = {}
     for name, model in models.items():

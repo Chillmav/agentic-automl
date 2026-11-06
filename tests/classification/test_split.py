@@ -3,8 +3,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from agentic_automl.data import load_classification_csv, stratified_split
-from agentic_automl.model import train_logistic_regression
+from agentic_automl.classification.data import load_classification_csv, stratified_split
+from agentic_automl.classification.models.logistic_regression import (
+    train_logistic_regression,
+)
 
 
 @pytest.mark.parametrize("test_size", [0.2, 0.3])

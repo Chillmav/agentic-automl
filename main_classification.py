@@ -5,8 +5,11 @@ from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from agentic_automl.comparison import compare_models
-from agentic_automl.data import count_duplicate_rows, load_classification_csv
+from agentic_automl.classification.comparison import compare_classification_models
+from agentic_automl.classification.data import (
+    count_duplicate_rows,
+    load_classification_csv,
+)
 
 MAX_SAMPLES = 10_000
 DATASETS = {
@@ -31,7 +34,9 @@ def limit_samples(
 def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
     """Return one score table per dataset; sample and duplicate counts live in table.attrs."""
     data_dir = (
-        data_dir if data_dir is not None else Path(__file__).resolve().parent / "data"
+        data_dir
+        if data_dir is not None
+        else Path(__file__).resolve().parent / "data" / "binary_classification"
     )
     tables = {}
     for filename, target_column in DATASETS.items():
@@ -41,7 +46,7 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
         features = features.drop(columns=["person_id", "PassengerId"], errors="ignore")
         features, target = limit_samples(features, target)
         categorical = ["Pclass"] if filename == "Titanic-Dataset.xls" else None
-        table = compare_models(
+        table = compare_classification_models(
             features, target, categorical_columns=categorical, positive_class="1"
         )
         table.attrs.update(
@@ -55,6 +60,6 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
 if __name__ == "__main__":
     tables = main()
 
-for dataset, table in tables.items():
-    print(f"\n{dataset}")
-    print(table.to_string())
+    for dataset, table in tables.items():
+        print(f"\n{dataset}")
+        print(table.to_string())

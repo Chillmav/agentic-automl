@@ -3,7 +3,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from agentic_automl.data import count_duplicate_rows, load_classification_csv
+from agentic_automl.classification.data import (
+    count_duplicate_rows,
+    load_classification_csv,
+)
 
 
 def test_load_csv_separates_features_and_preserves_labels(tmp_path: Path) -> None:

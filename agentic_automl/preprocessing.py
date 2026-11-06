@@ -84,3 +84,18 @@ class TabularPreprocessor(TransformerMixin, BaseEstimator):
 
     def transform(self, features: pd.DataFrame) -> np.ndarray | spmatrix:
         return self.transformer_.transform(features)
+
+
+def build_pipeline(
+    estimator: BaseEstimator, categorical_columns: list[str] | None = None
+) -> Pipeline:
+    """Attach shared preprocessing to an estimator; fitting happens separately."""
+    return Pipeline(
+        [
+            (
+                "preprocessor",
+                TabularPreprocessor(categorical_columns=categorical_columns),
+            ),
+            ("estimator", estimator),
+        ]
+    )

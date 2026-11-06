@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from main import MAX_SAMPLES, limit_samples, main
+from main_classification import MAX_SAMPLES, limit_samples, main
 
 
 @pytest.mark.parametrize("rows", [100, MAX_SAMPLES, MAX_SAMPLES + 1000])
@@ -19,20 +19,20 @@ def test_sample_limit_alignment_and_reproducibility(rows: int) -> None:
 
 
 def test_runner_skips_datasets_without_configured_target(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("main.DATASETS", {"airlines.csv": None})
+    monkeypatch.setattr("main_classification.DATASETS", {"airlines.csv": None})
     assert main() == {}
     assert capsys.readouterr().out == ""
 
 
 def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -> None:
-    monkeypatch.setattr("main.DATASETS", {"example.csv": "target"})
+    monkeypatch.setattr("main_classification.DATASETS", {"example.csv": "target"})
     pd.DataFrame({"signal": [0, 1] * 20, "target": [0, 1] * 20}).to_csv(
         tmp_path / "example.csv", index=False
     )
     tables = main(data_dir=tmp_path)
     table = tables["example.csv"]
     assert isinstance(table, pd.DataFrame)
-    assert table.shape == (3, 4)
+    assert table.shape == (4, 4)
     assert table.attrs == {
         "positive_class": "1",
         "sample_rows": 40,

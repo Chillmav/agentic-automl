@@ -5,8 +5,11 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyClassifier
 
-from agentic_automl.data import load_classification_csv
-from agentic_automl.model import build_pipeline, train_logistic_regression
+from agentic_automl.classification.data import load_classification_csv
+from agentic_automl.classification.models.logistic_regression import (
+    train_logistic_regression,
+)
+from agentic_automl.preprocessing import build_pipeline
 
 
 def test_shared_pipeline_supports_other_estimators_and_defers_fitting() -> None:
