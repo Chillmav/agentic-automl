@@ -36,6 +36,7 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
         features, target = limit_samples(features, target)
         temporal = filename == "Walmart_Sales.csv"
         test_size = 0.2
+        dates = None
         if temporal:
             dates = pd.to_datetime(features["Date"], format="%d-%m-%Y").sort_values()
             order = dates.index
@@ -48,6 +49,7 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
             categorical_columns=["Store", "Holiday_Flag"] if temporal else None,
             test_size=test_size,
             shuffle=not temporal,
+            dates=dates,
         )
         table.attrs.update(
             sample_rows=len(features),
@@ -58,8 +60,25 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
     return tables
 
 
-if __name__ == "__main__":
-    for dataset, table in main().items():
+def print_results(tables: dict[str, pd.DataFrame]) -> None:
+    """Display CV averages and a separate winner-only final test table."""
+    for dataset, table in tables.items():
         print(f"\n{dataset} ({table.attrs['sample_rows']:,} rows)")
-        print(table.to_string())
+        print("CV averages:")
+        print(
+            table[["cv_mse_mean", "cv_r2_mean"]]
+            .rename(columns={"cv_mse_mean": "mse", "cv_r2_mean": "r2"})
+            .to_string()
+        )
+        winner = table.attrs["selected_model"]
+        print(f"\nWinner selected by lowest mean CV MSE: {winner}\nFinal test results:")
+        print(
+            table.loc[[winner], ["test_mse", "test_r2"]]
+            .rename(columns={"test_mse": "mse", "test_r2": "r2"})
+            .to_string()
+        )
         print(f"Rejected columns: {table.attrs['rejected_columns']}")
+
+
+if __name__ == "__main__":
+    print_results(main())

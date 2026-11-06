@@ -22,7 +22,7 @@ def compare_classification_models(
     *,
     positive_class: str | int,
 ) -> pd.DataFrame:
-    """Compare with 3-fold development CV and a separate 20% test set by default."""
+    """Rank by mean CV F1, then evaluate only the winner on the separate test set."""
     if positive_class not in target.unique():
         raise ValueError(
             f"Positive class {positive_class!r} was not found in the target."
@@ -60,24 +60,27 @@ def compare_classification_models(
     }
     results = {}
     for name, model in models.items():
-        cv_scores = cross_validation_scores(
+        results[name] = cross_validation_scores(
             model, train_x, train_y, positive_class, folds
         )
-        predictions = model.predict(test_x)
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            test_y,
-            predictions,
-            average="binary",
-            pos_label=positive_class,
-            zero_division=0,
-        )
-        results[name] = {
-            **cv_scores,
-            "test_acc": float(accuracy_score(test_y, predictions)),
-            "test_recall": float(recall),
-            "test_precision": float(precision),
-            "test_f1": float(f1),
-        }
+    # max keeps the first model in comparison order when CV scores tie.
+    winner = max(results, key=lambda name: results[name]["cv_f1_mean"])
+    predictions = models[winner].predict(test_x)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        test_y, predictions, average="binary", pos_label=positive_class, zero_division=0
+    )
     table = pd.DataFrame.from_dict(results, orient="index").rename_axis("model")
-    table.attrs["positive_class"] = positive_class
+    for metric, score in {
+        "test_acc": accuracy_score(test_y, predictions),
+        "test_recall": recall,
+        "test_precision": precision,
+        "test_f1": f1,
+    }.items():
+        table[metric] = float("nan")
+        table.loc[winner, metric] = float(score)
+    table.attrs.update(
+        positive_class=positive_class,
+        selected_model=winner,
+        selection_metric="cv_f1_mean",
+    )
     return table

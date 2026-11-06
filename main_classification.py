@@ -57,9 +57,23 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
     return tables
 
 
-if __name__ == "__main__":
-    tables = main()
-
+def print_results(tables: dict[str, pd.DataFrame]) -> None:
+    """Display CV means for all models, followed by the winner's test scores."""
     for dataset, table in tables.items():
-        print(f"\n{dataset}")
-        print(table.to_string())
+        print(f"\n{dataset}\nCV averages:")
+        averages = table.filter(regex=r"^cv_.*_mean$").rename(
+            columns=lambda name: name.removeprefix("cv_").removesuffix("_mean")
+        )
+        print(averages.to_string())
+        winner = table.attrs["selected_model"]
+        print(f"\nWinner selected by mean CV F1: {winner}\nFinal test results:")
+        test_scores = (
+            table.filter(regex=r"^test_")
+            .loc[[winner]]
+            .rename(columns=lambda name: name.removeprefix("test_"))
+        )
+        print(test_scores.to_string())
+
+
+if __name__ == "__main__":
+    print_results(main())

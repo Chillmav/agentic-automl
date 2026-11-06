@@ -3,14 +3,33 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+from sklearn.dummy import DummyRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
 
 from agentic_automl.regression.comparison import compare_regression_models
 from agentic_automl.regression.data import load_regression_csv
+from agentic_automl.regression.models.decision_tree import train_decision_tree
+from agentic_automl.regression.models.gradient_boosting import train_gradient_boosting
 from agentic_automl.regression.models.linear_regression import train_linear_regression
+from agentic_automl.regression.models.random_forest import train_random_forest
+from agentic_automl.regression.models.ridge import train_ridge
+from agentic_automl.regression.validation import cross_validation_scores
 
 
-def test_csv_to_regression_comparison_fits_training_rows_only(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "trainer",
+    [
+        train_linear_regression,
+        train_ridge,
+        train_decision_tree,
+        train_random_forest,
+        train_gradient_boosting,
+    ],
+)
+def test_csv_to_regression_comparison_fits_training_rows_only(
+    tmp_path: Path, trainer
+) -> None:
     path = tmp_path / "data.csv"
     pd.DataFrame({"size": range(100), "price": [2 * x + 1 for x in range(100)]}).to_csv(
         path, index=False
@@ -20,17 +39,42 @@ def test_csv_to_regression_comparison_fits_training_rows_only(tmp_path: Path) ->
         features, target, test_size=0.2, random_state=42
     )
     with patch(
-        "agentic_automl.regression.comparison.train_linear_regression",
-        wraps=train_linear_regression,
+        f"agentic_automl.regression.comparison.{trainer.__name__}",
+        wraps=trainer,
     ) as train:
         table = compare_regression_models(features, target)
     train.assert_called_once()
     pd.testing.assert_frame_equal(train.call_args.args[0], train_x)
     pd.testing.assert_series_equal(train.call_args.args[1], train_y)
-    assert table.columns.tolist() == ["mse", "r2"]
-    assert table.loc["linear_regression", "mse"] == pytest.approx(0, abs=1e-10)
-    assert table.loc["linear_regression", "r2"] == pytest.approx(1)
-    assert table.loc["mean_baseline", "mse"] > table.loc["linear_regression", "mse"]
+    assert table.columns.tolist() == [
+        "cv_mse_mean",
+        "cv_mse_std",
+        "cv_r2_mean",
+        "cv_r2_std",
+        "test_mse",
+        "test_r2",
+    ]
+    assert table.index.tolist() == [
+        "mean_baseline",
+        "linear_regression",
+        "ridge",
+        "decision_tree",
+        "random_forest",
+        "gradient_boosting",
+    ]
+    assert table.attrs["selected_model"] == "linear_regression"
+    assert table.loc["linear_regression", "test_mse"] == pytest.approx(0, abs=1e-10)
+    assert table.loc["linear_regression", "test_r2"] == pytest.approx(1)
+    assert (
+        table.drop(index="linear_regression")[["test_mse", "test_r2"]]
+        .isna()
+        .all()
+        .all()
+    )
+    assert (
+        table.drop(index="mean_baseline")["cv_mse_mean"]
+        < table.loc["mean_baseline", "cv_mse_mean"]
+    ).all()
     pd.testing.assert_frame_equal(table, compare_regression_models(features, target))
 
 
@@ -47,3 +91,72 @@ def test_ordered_split_trains_only_on_earlier_rows() -> None:
     ) as train:
         compare_regression_models(features, target, shuffle=False)
     assert train.call_args.args[0].index.tolist() == list(range(80))
+
+
+def test_cv_uses_shared_folds_without_final_test_rows() -> None:
+    features, target = pd.DataFrame({"size": range(40)}), pd.Series(range(40))
+    expected_x, _, expected_y, _ = train_test_split(
+        features, target, test_size=0.2, random_state=42
+    )
+    with patch(
+        "agentic_automl.regression.comparison.cross_validation_scores",
+        wraps=cross_validation_scores,
+    ) as validate:
+        compare_regression_models(features, target)
+    assert validate.call_count == 6
+    folds = validate.call_args_list[0].args[3]
+    for call in validate.call_args_list:
+        pd.testing.assert_frame_equal(call.args[1], expected_x)
+        pd.testing.assert_series_equal(call.args[2], expected_y)
+        assert call.args[3] is folds
+
+
+@pytest.mark.parametrize("winning_index", [0, 4])
+def test_only_lowest_cv_mse_winner_predicts_test_rows(winning_index: int) -> None:
+    features, target = pd.DataFrame({"size": range(40)}), pd.Series(range(40))
+    _, test_x, _, test_y = train_test_split(
+        features, target, test_size=0.2, random_state=42
+    )
+    calls = []
+    baseline_calls = []
+    original_baseline_predict = DummyRegressor.predict
+
+    def predict_pipeline(model, test_features):
+        calls.append(test_features)
+        return test_y.to_numpy()
+
+    def predict_baseline(model, prediction_features):
+        # Gradient boosting also uses DummyRegressor internally during fitting.
+        if isinstance(
+            prediction_features, pd.DataFrame
+        ) and prediction_features.index.equals(test_x.index):
+            baseline_calls.append(prediction_features)
+        return original_baseline_predict(model, prediction_features)
+
+    scores = [
+        {"cv_mse_mean": 0.1 if index == winning_index == 4 else 2.0}
+        for index in range(6)
+    ]
+    with (
+        patch(
+            "agentic_automl.regression.comparison.cross_validation_scores",
+            side_effect=scores,
+        ),
+        patch.object(Pipeline, "predict", new=predict_pipeline),
+        patch.object(DummyRegressor, "predict", new=predict_baseline),
+    ):
+        table = compare_regression_models(features, target)
+    assert len(calls) + len(baseline_calls) == 1
+    expected = "random_forest" if winning_index == 4 else "mean_baseline"
+    assert table.attrs["selected_model"] == expected
+    pd.testing.assert_frame_equal(calls[0] if calls else baseline_calls[0], test_x)
+    assert table.drop(index=expected)[["test_mse", "test_r2"]].isna().all().all()
+
+
+def test_final_date_boundary_cannot_split_same_day() -> None:
+    features, target = pd.DataFrame({"size": range(12)}), pd.Series(range(12))
+    dates = pd.Series(pd.date_range("2020-01-01", periods=4).repeat(3))
+    with pytest.raises(ValueError, match="whole dates"):
+        compare_regression_models(
+            features, target, test_size=0.3, shuffle=False, dates=dates
+        )

@@ -3,6 +3,9 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 
 from agentic_automl.classification.comparison import compare_classification_models
 from agentic_automl.classification.data import load_classification_csv, stratified_split
@@ -34,33 +37,22 @@ def test_csv_to_comparison_beats_guessing_on_clear_signal(tmp_path: Path) -> Non
         + test_columns
     )
     assert results.loc["logistic_regression", test_columns].eq(1.0).all()
-    assert results.loc["knn", test_columns].eq(1.0).all()
-    assert (
-        results.loc[["decision_tree", "random_forest", "svm"], test_columns]
-        .eq(1.0)
-        .all()
-        .all()
-    )
-    assert results.loc["guessing_baseline", "test_acc"] < 1.0
-    assert results.loc["majority_baseline", test_columns].to_dict() == {
-        "test_acc": 0.8,
-        "test_recall": 0.0,
-        "test_precision": 0.0,
-        "test_f1": 0.0,
-    }
+    assert results.attrs["selected_model"] == "logistic_regression"
+    assert results.drop(index="logistic_regression")[test_columns].isna().all().all()
+    assert results.loc["majority_baseline", "cv_f1_mean"] == 0.0
     pd.testing.assert_frame_equal(
         results, compare_classification_models(features, target, positive_class="yes")
     )
-    assert ((results >= 0) & (results <= 1)).all().all()
+    assert (((results >= 0) & (results <= 1)) | results.isna()).all().all()
 
     negative_as_positive = compare_classification_models(
         features, target, positive_class="no"
     )
-    assert negative_as_positive.loc["majority_baseline", "test_recall"] == 1.0
-    assert negative_as_positive.loc["majority_baseline", "test_precision"] == 0.8
-    assert negative_as_positive.loc["majority_baseline", "test_f1"] == pytest.approx(
-        8 / 9
-    )
+    assert negative_as_positive.loc["majority_baseline", "cv_recall_mean"] == 1.0
+    assert negative_as_positive.loc[
+        "majority_baseline", "cv_precision_mean"
+    ] == pytest.approx(0.8, abs=0.01)
+    assert negative_as_positive.loc["logistic_regression", test_columns].eq(1.0).all()
 
 
 @pytest.mark.parametrize(
@@ -133,3 +125,48 @@ def test_insufficient_cv_data_has_clear_error(labels: list, message: str) -> Non
             pd.Series(labels),
             positive_class=1,
         )
+
+
+@pytest.mark.parametrize("winning_index", [0, 5])
+def test_only_cv_winner_predicts_test_rows_with_deterministic_ties(
+    winning_index: int,
+) -> None:
+    features, target = pd.DataFrame({"value": range(60)}), pd.Series(["no", "yes"] * 30)
+    _, test_x, _, test_y = stratified_split(features, target)
+    cv_scores = [
+        {"cv_f1_mean": 1.0 if index == winning_index == 5 else 0.5}
+        for index in range(7)
+    ]
+    pipeline_predictions = []
+
+    def predict_pipeline(model, test_features):
+        pipeline_predictions.append((model, test_features))
+        return test_y.to_numpy()
+
+    with (
+        patch(
+            "agentic_automl.classification.comparison.cross_validation_scores",
+            side_effect=cv_scores,
+        ),
+        patch.object(Pipeline, "predict", new=predict_pipeline),
+        patch.object(
+            DummyClassifier, "predict", autospec=True, return_value=test_y.to_numpy()
+        ) as baseline_predict,
+    ):
+        table = compare_classification_models(features, target, positive_class="yes")
+    assert len(pipeline_predictions) + baseline_predict.call_count == 1
+    if winning_index == 5:
+        assert table.attrs["selected_model"] == "random_forest"
+        assert isinstance(
+            pipeline_predictions[0][0].named_steps["estimator"],
+            RandomForestClassifier,
+        )
+        pd.testing.assert_frame_equal(pipeline_predictions[0][1], test_x)
+    else:
+        assert (
+            table.attrs["selected_model"] == "guessing_baseline"
+        )  # First model wins a CV tie.
+        pd.testing.assert_frame_equal(baseline_predict.call_args.args[1], test_x)
+    test_scores = table.filter(like="test_")
+    assert test_scores.notna().all(axis=1).sum() == 1
+    assert test_scores.drop(index=table.attrs["selected_model"]).isna().all().all()
