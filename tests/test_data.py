@@ -1,8 +1,9 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from agentic_automl.data import load_classification_csv
+from agentic_automl.data import count_duplicate_rows, load_classification_csv
 
 
 def test_load_csv_separates_features_and_preserves_labels(tmp_path: Path) -> None:
@@ -40,3 +41,28 @@ def test_invalid_data_is_rejected(tmp_path: Path, content: str, message: str) ->
 def test_missing_file_is_reported(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_classification_csv(tmp_path / "missing.csv", "target")
+
+
+@pytest.mark.parametrize(
+    ("values", "labels", "expected"),
+    [
+        ([1, 1, 2], [0, 0, 1], 1),
+        ([1, 1, 2], [0, 1, 1], 0),
+        ([None, None, 2], [0, 0, 1], 1),
+    ],
+)
+def test_duplicate_count_includes_target_and_does_not_modify_data(
+    values: list, labels: list, expected: int
+) -> None:
+    features, target = pd.DataFrame({"value": values}), pd.Series(labels)
+    original_features, original_target = features.copy(), target.copy()
+    assert count_duplicate_rows(features, target) == expected
+    pd.testing.assert_frame_equal(features, original_features)
+    pd.testing.assert_series_equal(target, original_target)
+
+
+def test_duplicate_check_rejects_misaligned_rows() -> None:
+    with pytest.raises(ValueError, match="matching row indices"):
+        count_duplicate_rows(
+            pd.DataFrame({"value": [1, 2]}), pd.Series([0, 1], index=[1, 2])
+        )

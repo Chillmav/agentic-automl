@@ -1,13 +1,12 @@
 """Local experiments: edit DATASETS to choose files and target columns."""
 
 from pathlib import Path
-from pprint import pprint
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from agentic_automl.comparison import compare_models
-from agentic_automl.data import load_classification_csv
+from agentic_automl.data import count_duplicate_rows, load_classification_csv
 
 MAX_SAMPLES = 10_000
 DATASETS = {
@@ -29,19 +28,33 @@ def limit_samples(
     return sampled_x, sampled_y
 
 
-def main() -> None:
-    data_dir = Path(__file__).resolve().parent / "data"
+def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
+    """Return one score table per dataset; sample and duplicate counts live in table.attrs."""
+    data_dir = (
+        data_dir if data_dir is not None else Path(__file__).resolve().parent / "data"
+    )
+    tables = {}
     for filename, target_column in DATASETS.items():
         if target_column is None:
-            print(f"Skipping {filename}: no binary target configured.")
             continue
         features, target = load_classification_csv(data_dir / filename, target_column)
         features = features.drop(columns=["person_id", "PassengerId"], errors="ignore")
         features, target = limit_samples(features, target)
         categorical = ["Pclass"] if filename == "Titanic-Dataset.xls" else None
-        print(f"\n{filename}: {len(features):,} rows (including test rows)", flush=True)
-        pprint(compare_models(features, target, categorical_columns=categorical))
+        table = compare_models(
+            features, target, categorical_columns=categorical, positive_class="1"
+        )
+        table.attrs.update(
+            sample_rows=len(features),
+            duplicate_rows=count_duplicate_rows(features, target),
+        )
+        tables[filename] = table
+    return tables
 
 
 if __name__ == "__main__":
-    main()
+    tables = main()
+
+for dataset, table in tables.items():
+    print(f"\n{dataset}")
+    print(table.to_string())

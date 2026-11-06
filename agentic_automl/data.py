@@ -23,6 +23,13 @@ def load_classification_csv(
     return features, target
 
 
+def count_duplicate_rows(features: pd.DataFrame, target: pd.Series) -> int:
+    """Count repeated feature-and-target rows after the first occurrence; change nothing."""
+    if not features.index.equals(target.index):
+        raise ValueError("Features and target must have matching row indices.")
+    return int(pd.concat([features, target], axis=1).duplicated().sum())
+
+
 def stratified_split(
     features: pd.DataFrame,
     target: pd.Series,

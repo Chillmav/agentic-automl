@@ -3,9 +3,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.dummy import DummyClassifier
 
 from agentic_automl.data import load_classification_csv
-from agentic_automl.model import train_logistic_regression
+from agentic_automl.model import build_pipeline, train_logistic_regression
+
+
+def test_shared_pipeline_supports_other_estimators_and_defers_fitting() -> None:
+    pipeline = build_pipeline(DummyClassifier(strategy="most_frequent"))
+    assert not hasattr(pipeline.named_steps["preprocessor"], "transformer_")
+    pipeline.fit(pd.DataFrame({"city": ["A", "B", None]}), pd.Series([0, 0, 1]))
+    assert pipeline.predict(pd.DataFrame({"city": ["unseen"]})).tolist() == [0]
 
 
 def test_loaded_csv_can_train_and_predict(tmp_path: Path) -> None:

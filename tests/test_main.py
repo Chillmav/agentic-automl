@@ -20,5 +20,22 @@ def test_sample_limit_alignment_and_reproducibility(rows: int) -> None:
 
 def test_runner_skips_datasets_without_configured_target(monkeypatch, capsys) -> None:
     monkeypatch.setattr("main.DATASETS", {"airlines.csv": None})
-    main()
-    assert "Skipping airlines.csv" in capsys.readouterr().out
+    assert main() == {}
+    assert capsys.readouterr().out == ""
+
+
+def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("main.DATASETS", {"example.csv": "target"})
+    pd.DataFrame({"signal": [0, 1] * 20, "target": [0, 1] * 20}).to_csv(
+        tmp_path / "example.csv", index=False
+    )
+    tables = main(data_dir=tmp_path)
+    table = tables["example.csv"]
+    assert isinstance(table, pd.DataFrame)
+    assert table.shape == (3, 4)
+    assert table.attrs == {
+        "positive_class": "1",
+        "sample_rows": 40,
+        "duplicate_rows": 38,
+    }
+    assert capsys.readouterr().out == ""
