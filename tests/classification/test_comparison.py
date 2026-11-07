@@ -9,13 +9,13 @@ from sklearn.pipeline import Pipeline
 
 from agentic_automl.classification.comparison import compare_classification_models
 from agentic_automl.classification.data import load_classification_csv, stratified_split
-from agentic_automl.classification.models.decision_tree import train_decision_tree
-from agentic_automl.classification.models.knn import train_knn
+from agentic_automl.classification.models.decision_tree import build_decision_tree
+from agentic_automl.classification.models.knn import build_knn
 from agentic_automl.classification.models.logistic_regression import (
-    train_logistic_regression,
+    build_logistic_regression,
 )
-from agentic_automl.classification.models.random_forest import train_random_forest
-from agentic_automl.classification.models.svm import train_svm
+from agentic_automl.classification.models.random_forest import build_random_forest
+from agentic_automl.classification.models.svm import build_svm
 from agentic_automl.classification.validation import cross_validation_scores
 
 
@@ -58,19 +58,16 @@ def test_csv_to_comparison_beats_guessing_on_clear_signal(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "trainer",
     [
-        train_logistic_regression,
-        train_knn,
-        train_decision_tree,
-        train_random_forest,
-        train_svm,
+        build_logistic_regression,
+        build_knn,
+        build_decision_tree,
+        build_random_forest,
+        build_svm,
     ],
 )
-def test_comparison_passes_only_training_rows_and_category_overrides(trainer) -> None:
+def test_comparison_passes_category_overrides_to_builders(trainer) -> None:
     features = pd.DataFrame({"code": [1, 2] * 50})
     target = pd.Series(["no", "yes"] * 50)
-    expected_train_x, _, expected_train_y, _ = stratified_split(
-        features, target, test_size=0.3
-    )
     with patch(
         f"agentic_automl.classification.comparison.{trainer.__name__}",
         wraps=trainer,
@@ -82,10 +79,7 @@ def test_comparison_passes_only_training_rows_and_category_overrides(trainer) ->
             test_size=0.3,
             positive_class="yes",
         )
-    train.assert_called_once()
-    pd.testing.assert_frame_equal(train.call_args.args[0], expected_train_x)
-    pd.testing.assert_series_equal(train.call_args.args[1], expected_train_y)
-    assert train.call_args.kwargs["categorical_columns"] == ["code"]
+    train.assert_called_once_with(categorical_columns=["code"])
     assert results.loc["logistic_regression", "test_acc"] == 1.0
 
 
@@ -132,12 +126,23 @@ def test_only_cv_winner_predicts_test_rows_with_deterministic_ties(
     winning_index: int,
 ) -> None:
     features, target = pd.DataFrame({"value": range(60)}), pd.Series(["no", "yes"] * 30)
-    _, test_x, _, test_y = stratified_split(features, target)
+    train_x, test_x, train_y, test_y = stratified_split(features, target)
     cv_scores = [
         {"cv_f1_mean": 1.0 if index == winning_index == 5 else 0.5}
         for index in range(7)
     ]
     pipeline_predictions = []
+    fits = []
+    original_pipeline_fit = Pipeline.fit
+    original_baseline_fit = DummyClassifier.fit
+
+    def fit_pipeline(model, fit_features, fit_target):
+        fits.append((fit_features, fit_target))
+        return original_pipeline_fit(model, fit_features, fit_target)
+
+    def fit_baseline(model, fit_features, fit_target):
+        fits.append((fit_features, fit_target))
+        return original_baseline_fit(model, fit_features, fit_target)
 
     def predict_pipeline(model, test_features):
         pipeline_predictions.append((model, test_features))
@@ -149,12 +154,17 @@ def test_only_cv_winner_predicts_test_rows_with_deterministic_ties(
             side_effect=cv_scores,
         ),
         patch.object(Pipeline, "predict", new=predict_pipeline),
+        patch.object(Pipeline, "fit", new=fit_pipeline),
+        patch.object(DummyClassifier, "fit", new=fit_baseline),
         patch.object(
             DummyClassifier, "predict", autospec=True, return_value=test_y.to_numpy()
         ) as baseline_predict,
     ):
         table = compare_classification_models(features, target, positive_class="yes")
     assert len(pipeline_predictions) + baseline_predict.call_count == 1
+    assert len(fits) == 1
+    pd.testing.assert_frame_equal(fits[0][0], train_x)
+    pd.testing.assert_series_equal(fits[0][1], train_y)
     if winning_index == 5:
         assert table.attrs["selected_model"] == "random_forest"
         assert isinstance(

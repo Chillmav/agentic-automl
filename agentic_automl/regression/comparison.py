@@ -4,11 +4,11 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
 from agentic_automl.regression.data import validate_regression_target
-from agentic_automl.regression.models.decision_tree import train_decision_tree
-from agentic_automl.regression.models.gradient_boosting import train_gradient_boosting
-from agentic_automl.regression.models.linear_regression import train_linear_regression
-from agentic_automl.regression.models.random_forest import train_random_forest
-from agentic_automl.regression.models.ridge import train_ridge
+from agentic_automl.regression.models.decision_tree import build_decision_tree
+from agentic_automl.regression.models.gradient_boosting import build_gradient_boosting
+from agentic_automl.regression.models.linear_regression import build_linear_regression
+from agentic_automl.regression.models.random_forest import build_random_forest
+from agentic_automl.regression.models.ridge import build_ridge
 from agentic_automl.regression.validation import (
     cross_validation_scores,
     regression_cv_folds,
@@ -46,21 +46,22 @@ def compare_regression_models(
         )
     folds = regression_cv_folds(train_x, shuffle=shuffle, dates=train_dates)
     models = {
-        "mean_baseline": DummyRegressor(strategy="mean").fit(train_x, train_y),
-        "linear_regression": train_linear_regression(
-            train_x, train_y, categorical_columns
+        "mean_baseline": DummyRegressor(strategy="mean"),
+        "linear_regression": build_linear_regression(
+            categorical_columns=categorical_columns
         ),
-        "ridge": train_ridge(train_x, train_y, categorical_columns),
-        "decision_tree": train_decision_tree(train_x, train_y, categorical_columns),
-        "random_forest": train_random_forest(train_x, train_y, categorical_columns),
-        "gradient_boosting": train_gradient_boosting(
-            train_x, train_y, categorical_columns
+        "ridge": build_ridge(categorical_columns=categorical_columns),
+        "decision_tree": build_decision_tree(categorical_columns=categorical_columns),
+        "random_forest": build_random_forest(categorical_columns=categorical_columns),
+        "gradient_boosting": build_gradient_boosting(
+            categorical_columns=categorical_columns
         ),
     }
     results = {}
     for name, model in models.items():
         results[name] = cross_validation_scores(model, train_x, train_y, folds)
     winner = min(results, key=lambda name: results[name]["cv_mse_mean"])
+    models[winner].fit(train_x, train_y)
     predictions = models[winner].predict(test_x)
     table = pd.DataFrame.from_dict(results, orient="index").rename_axis("model")
     for metric, score in {
@@ -71,6 +72,8 @@ def compare_regression_models(
         table.loc[winner, metric] = float(score)
     table.attrs.update(selected_model=winner, selection_metric="cv_mse_mean")
     table.attrs["rejected_columns"] = (
-        models["linear_regression"].named_steps["preprocessor"].rejected_columns_
+        models[winner].named_steps["preprocessor"].rejected_columns_
+        if hasattr(models[winner], "named_steps")
+        else {}
     )
     return table

@@ -9,25 +9,25 @@ from sklearn.pipeline import Pipeline
 
 from agentic_automl.regression.comparison import compare_regression_models
 from agentic_automl.regression.data import load_regression_csv
-from agentic_automl.regression.models.decision_tree import train_decision_tree
-from agentic_automl.regression.models.gradient_boosting import train_gradient_boosting
-from agentic_automl.regression.models.linear_regression import train_linear_regression
-from agentic_automl.regression.models.random_forest import train_random_forest
-from agentic_automl.regression.models.ridge import train_ridge
+from agentic_automl.regression.models.decision_tree import build_decision_tree
+from agentic_automl.regression.models.gradient_boosting import build_gradient_boosting
+from agentic_automl.regression.models.linear_regression import build_linear_regression
+from agentic_automl.regression.models.random_forest import build_random_forest
+from agentic_automl.regression.models.ridge import build_ridge
 from agentic_automl.regression.validation import cross_validation_scores
 
 
 @pytest.mark.parametrize(
     "trainer",
     [
-        train_linear_regression,
-        train_ridge,
-        train_decision_tree,
-        train_random_forest,
-        train_gradient_boosting,
+        build_linear_regression,
+        build_ridge,
+        build_decision_tree,
+        build_random_forest,
+        build_gradient_boosting,
     ],
 )
-def test_csv_to_regression_comparison_fits_training_rows_only(
+def test_csv_to_regression_comparison_uses_unfitted_builders(
     tmp_path: Path, trainer
 ) -> None:
     path = tmp_path / "data.csv"
@@ -35,17 +35,12 @@ def test_csv_to_regression_comparison_fits_training_rows_only(
         path, index=False
     )
     features, target = load_regression_csv(path, "price")
-    train_x, _, train_y, _ = train_test_split(
-        features, target, test_size=0.2, random_state=42
-    )
     with patch(
         f"agentic_automl.regression.comparison.{trainer.__name__}",
         wraps=trainer,
     ) as train:
         table = compare_regression_models(features, target)
-    train.assert_called_once()
-    pd.testing.assert_frame_equal(train.call_args.args[0], train_x)
-    pd.testing.assert_series_equal(train.call_args.args[1], train_y)
+    train.assert_called_once_with(categorical_columns=None)
     assert table.columns.tolist() == [
         "cv_mse_mean",
         "cv_mse_std",
@@ -85,12 +80,16 @@ def test_too_few_test_rows_are_rejected() -> None:
 
 def test_ordered_split_trains_only_on_earlier_rows() -> None:
     features, target = pd.DataFrame({"size": range(100)}), pd.Series(range(100))
-    with patch(
-        "agentic_automl.regression.comparison.train_linear_regression",
-        wraps=train_linear_regression,
-    ) as train:
+    fitted_rows = []
+    original_fit = Pipeline.fit
+
+    def record_fit(model, fit_features, fit_target, **kwargs):
+        fitted_rows.append(fit_features.index.tolist())
+        return original_fit(model, fit_features, fit_target, **kwargs)
+
+    with patch.object(Pipeline, "fit", new=record_fit):
         compare_regression_models(features, target, shuffle=False)
-    assert train.call_args.args[0].index.tolist() == list(range(80))
+    assert fitted_rows[-1] == list(range(80))
 
 
 def test_cv_uses_shared_folds_without_final_test_rows() -> None:
@@ -114,12 +113,24 @@ def test_cv_uses_shared_folds_without_final_test_rows() -> None:
 @pytest.mark.parametrize("winning_index", [0, 4])
 def test_only_lowest_cv_mse_winner_predicts_test_rows(winning_index: int) -> None:
     features, target = pd.DataFrame({"size": range(40)}), pd.Series(range(40))
-    _, test_x, _, test_y = train_test_split(
+    train_x, test_x, train_y, test_y = train_test_split(
         features, target, test_size=0.2, random_state=42
     )
     calls = []
     baseline_calls = []
     original_baseline_predict = DummyRegressor.predict
+    fits = []
+    original_pipeline_fit = Pipeline.fit
+    original_baseline_fit = DummyRegressor.fit
+
+    def fit_pipeline(model, fit_features, fit_target):
+        fits.append((fit_features, fit_target))
+        return original_pipeline_fit(model, fit_features, fit_target)
+
+    def fit_baseline(model, fit_features, fit_target, **kwargs):
+        if isinstance(fit_features, pd.DataFrame):
+            fits.append((fit_features, fit_target))
+        return original_baseline_fit(model, fit_features, fit_target, **kwargs)
 
     def predict_pipeline(model, test_features):
         calls.append(test_features)
@@ -144,9 +155,14 @@ def test_only_lowest_cv_mse_winner_predicts_test_rows(winning_index: int) -> Non
         ),
         patch.object(Pipeline, "predict", new=predict_pipeline),
         patch.object(DummyRegressor, "predict", new=predict_baseline),
+        patch.object(Pipeline, "fit", new=fit_pipeline),
+        patch.object(DummyRegressor, "fit", new=fit_baseline),
     ):
         table = compare_regression_models(features, target)
     assert len(calls) + len(baseline_calls) == 1
+    assert len(fits) == 1
+    pd.testing.assert_frame_equal(fits[0][0], train_x)
+    pd.testing.assert_series_equal(fits[0][1], train_y)
     expected = "random_forest" if winning_index == 4 else "mean_baseline"
     assert table.attrs["selected_model"] == expected
     pd.testing.assert_frame_equal(calls[0] if calls else baseline_calls[0], test_x)

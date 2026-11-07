@@ -6,6 +6,14 @@ from agentic_automl.preprocessing import build_pipeline
 from agentic_automl.regression.data import validate_regression_target
 
 
+def build_random_forest(categorical_columns: list[str] | None = None) -> Pipeline:
+    """Construct an unfitted 100-tree random-forest regression pipeline."""
+    return build_pipeline(
+        RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1),
+        categorical_columns,
+    )
+
+
 def train_random_forest(
     features: pd.DataFrame,
     target: pd.Series,
@@ -15,9 +23,6 @@ def train_random_forest(
     validate_regression_target(target)
     if not features.index.equals(target.index):
         raise ValueError("Features and target must have matching row indices.")
-    pipeline = build_pipeline(
-        RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1),
-        categorical_columns,
-    )
+    pipeline = build_random_forest(categorical_columns)
     pipeline.fit(features, target)
     return pipeline

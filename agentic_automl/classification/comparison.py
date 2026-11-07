@@ -4,13 +4,13 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from sklearn.model_selection import StratifiedKFold
 
 from agentic_automl.classification.data import stratified_split
-from agentic_automl.classification.models.decision_tree import train_decision_tree
-from agentic_automl.classification.models.knn import train_knn
+from agentic_automl.classification.models.decision_tree import build_decision_tree
+from agentic_automl.classification.models.knn import build_knn
 from agentic_automl.classification.models.logistic_regression import (
-    train_logistic_regression,
+    build_logistic_regression,
 )
-from agentic_automl.classification.models.random_forest import train_random_forest
-from agentic_automl.classification.models.svm import train_svm
+from agentic_automl.classification.models.random_forest import build_random_forest
+from agentic_automl.classification.models.svm import build_svm
 from agentic_automl.classification.validation import cross_validation_scores
 
 
@@ -40,23 +40,15 @@ def compare_classification_models(
     if min(len(training) for training, _ in folds) < 5:
         raise ValueError("Each CV training fold needs at least 5 rows for KNN.")
     models = {
-        "guessing_baseline": DummyClassifier(
-            strategy="stratified", random_state=42
-        ).fit(train_x, train_y),
-        "majority_baseline": DummyClassifier(strategy="most_frequent").fit(
-            train_x, train_y
+        "guessing_baseline": DummyClassifier(strategy="stratified", random_state=42),
+        "majority_baseline": DummyClassifier(strategy="most_frequent"),
+        "logistic_regression": build_logistic_regression(
+            categorical_columns=categorical_columns
         ),
-        "logistic_regression": train_logistic_regression(
-            train_x, train_y, categorical_columns=categorical_columns
-        ),
-        "knn": train_knn(train_x, train_y, categorical_columns=categorical_columns),
-        "decision_tree": train_decision_tree(
-            train_x, train_y, categorical_columns=categorical_columns
-        ),
-        "random_forest": train_random_forest(
-            train_x, train_y, categorical_columns=categorical_columns
-        ),
-        "svm": train_svm(train_x, train_y, categorical_columns=categorical_columns),
+        "knn": build_knn(categorical_columns=categorical_columns),
+        "decision_tree": build_decision_tree(categorical_columns=categorical_columns),
+        "random_forest": build_random_forest(categorical_columns=categorical_columns),
+        "svm": build_svm(categorical_columns=categorical_columns),
     }
     results = {}
     for name, model in models.items():
@@ -65,6 +57,7 @@ def compare_classification_models(
         )
     # max keeps the first model in comparison order when CV scores tie.
     winner = max(results, key=lambda name: results[name]["cv_f1_mean"])
+    models[winner].fit(train_x, train_y)
     predictions = models[winner].predict(test_x)
     precision, recall, f1, _ = precision_recall_fscore_support(
         test_y, predictions, average="binary", pos_label=positive_class, zero_division=0
