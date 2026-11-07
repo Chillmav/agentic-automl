@@ -7,6 +7,7 @@ import pandas as pd
 from agentic_automl.classification.data import count_duplicate_rows
 from agentic_automl.regression.comparison import compare_regression_models
 from agentic_automl.regression.data import load_regression_csv
+from agentic_automl.regression.random_search import SEARCH_SPACES
 
 MAX_SAMPLES = 10_000
 DATASETS = {
@@ -23,7 +24,11 @@ def limit_samples(
     return sampled, target.loc[sampled.index]
 
 
-def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
+def main(
+    data_dir: Path | None = None,
+    random_search_trials: int = 0,
+    model_names: list[str] | None = None,
+) -> dict[str, pd.DataFrame]:
     data_dir = (
         data_dir
         if data_dir is not None
@@ -50,6 +55,8 @@ def main(data_dir: Path | None = None) -> dict[str, pd.DataFrame]:
             test_size=test_size,
             shuffle=not temporal,
             dates=dates,
+            random_search_trials=random_search_trials,
+            model_names=model_names,
         )
         table.attrs.update(
             sample_rows=len(features),
@@ -64,6 +71,8 @@ def print_results(tables: dict[str, pd.DataFrame]) -> None:
     """Display CV averages and a separate winner-only final test table."""
     for dataset, table in tables.items():
         print(f"\n{dataset} ({table.attrs['sample_rows']:,} rows)")
+        for name, search in table.attrs.get("random_search", {}).items():
+            print(f"{name} search best parameters: {search['best_parameters']}")
         print("CV averages:")
         print(
             table[["cv_mse_mean", "cv_r2_mean"]]
@@ -81,4 +90,27 @@ def print_results(tables: dict[str, pd.DataFrame]) -> None:
 
 
 if __name__ == "__main__":
-    print_results(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Compare regressors with optional random search."
+    )
+    parser.add_argument(
+        "--random-search-trials",
+        type=int,
+        default=0,
+        help="Trials per selected regressor; 0 disables search",
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=list(SEARCH_SPACES),
+        help="Regressors to evaluate; defaults to all",
+    )
+    arguments = parser.parse_args()
+    print_results(
+        main(
+            random_search_trials=arguments.random_search_trials,
+            model_names=arguments.models,
+        )
+    )

@@ -9,6 +9,10 @@ from agentic_automl.regression.models.gradient_boosting import build_gradient_bo
 from agentic_automl.regression.models.linear_regression import build_linear_regression
 from agentic_automl.regression.models.random_forest import build_random_forest
 from agentic_automl.regression.models.ridge import build_ridge
+from agentic_automl.regression.random_search import (
+    SEARCH_SPACES,
+    random_search_regressor,
+)
 from agentic_automl.regression.validation import (
     cross_validation_scores,
     regression_cv_folds,
@@ -22,8 +26,26 @@ def compare_regression_models(
     test_size: float | int = 0.2,
     shuffle: bool = True,
     dates: pd.Series | None = None,
+    *,
+    random_search_trials: int = 0,
+    model_names: list[str] | None = None,
 ) -> pd.DataFrame:
     """Select by lowest mean CV MSE; test only the winner. Ordered dates stay together."""
+    if random_search_trials < 0:
+        raise ValueError("random_search_trials must be nonnegative; 0 disables search.")
+    builders = {
+        "linear_regression": build_linear_regression,
+        "ridge": build_ridge,
+        "decision_tree": build_decision_tree,
+        "random_forest": build_random_forest,
+        "gradient_boosting": build_gradient_boosting,
+    }
+    selected = list(builders) if model_names is None else model_names
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("Select at least one regressor, without duplicate names.")
+    unknown = [name for name in selected if name not in builders]
+    if unknown:
+        raise ValueError(f"Unknown regressors: {unknown}. Available: {list(builders)}")
     validate_regression_target(target)
     if not features.index.equals(target.index):
         raise ValueError("Features and target must have matching row indices.")
@@ -45,21 +67,35 @@ def compare_regression_models(
             "The final test split must keep whole dates together; adjust test_size."
         )
     folds = regression_cv_folds(train_x, shuffle=shuffle, dates=train_dates)
-    models = {
-        "mean_baseline": DummyRegressor(strategy="mean"),
-        "linear_regression": build_linear_regression(
-            categorical_columns=categorical_columns
-        ),
-        "ridge": build_ridge(categorical_columns=categorical_columns),
-        "decision_tree": build_decision_tree(categorical_columns=categorical_columns),
-        "random_forest": build_random_forest(categorical_columns=categorical_columns),
-        "gradient_boosting": build_gradient_boosting(
-            categorical_columns=categorical_columns
-        ),
-    }
+    models = {"mean_baseline": DummyRegressor(strategy="mean")}
+    models.update(
+        {
+            name: builders[name](categorical_columns=categorical_columns)
+            for name in selected
+        }
+    )
     results = {}
     for name, model in models.items():
         results[name] = cross_validation_scores(model, train_x, train_y, folds)
+    searches = {}
+    if random_search_trials:
+        for name in selected:
+            tuned, scores, trials = random_search_regressor(
+                models[name],
+                train_x,
+                train_y,
+                folds,
+                SEARCH_SPACES[name],
+                random_search_trials,
+                default_scores=results[name],
+            )
+            candidate = f"{name}_random_search"
+            models[candidate], results[candidate] = tuned, scores
+            best = trials.loc[trials["cv_mse_mean"].idxmin()]
+            searches[name] = {
+                "best_parameters": best["parameters"],
+                "trials": trials.to_dict(orient="records"),
+            }
     winner = min(results, key=lambda name: results[name]["cv_mse_mean"])
     models[winner].fit(train_x, train_y)
     predictions = models[winner].predict(test_x)
@@ -71,6 +107,8 @@ def compare_regression_models(
         table[metric] = float("nan")
         table.loc[winner, metric] = float(score)
     table.attrs.update(selected_model=winner, selection_metric="cv_mse_mean")
+    if searches:
+        table.attrs["random_search"] = searches
     table.attrs["rejected_columns"] = (
         models[winner].named_steps["preprocessor"].rejected_columns_
         if hasattr(models[winner], "named_steps")

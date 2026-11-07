@@ -78,3 +78,26 @@ def test_display_shows_cv_means_and_only_winner_test_scores(capsys) -> None:
     assert "other" in output.split("Final test results:")[0]
     assert "other" not in output.split("Final test results:")[1]
     pd.testing.assert_frame_equal(table, original)
+
+
+def test_runner_applies_regression_model_selection_and_search(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("main_regression.DATASETS", {"example.csv": "price"})
+    pd.DataFrame({"value": range(40), "price": range(40)}).to_csv(
+        tmp_path / "example.csv", index=False
+    )
+    table = main(
+        data_dir=tmp_path,
+        model_names=["ridge", "random_forest"],
+        random_search_trials=1,
+    )["example.csv"]
+    assert table.index.tolist() == [
+        "mean_baseline",
+        "ridge",
+        "random_forest",
+        "ridge_random_search",
+        "random_forest_random_search",
+    ]
+    assert set(table.attrs["random_search"]) == {"ridge", "random_forest"}
+    assert table.filter(regex="^test_").notna().any(axis=1).sum() == 1

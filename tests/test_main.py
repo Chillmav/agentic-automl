@@ -64,3 +64,20 @@ def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -
         "duplicate_rows": 38,
     }
     assert capsys.readouterr().out == ""
+
+
+def test_runner_applies_model_selection_and_search(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("main_classification.DATASETS", {"example.csv": "target"})
+    pd.DataFrame({"signal": [0, 1] * 20, "target": [0, 1] * 20}).to_csv(
+        tmp_path / "example.csv", index=False
+    )
+    table = main(data_dir=tmp_path, model_names=["svm"], random_search_trials=1)[
+        "example.csv"
+    ]
+    assert table.index.tolist() == [
+        "guessing_baseline",
+        "majority_baseline",
+        "svm",
+        "svm_random_search",
+    ]
+    assert list(table.attrs["random_search"]) == ["svm"]

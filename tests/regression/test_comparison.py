@@ -14,6 +14,7 @@ from agentic_automl.regression.models.gradient_boosting import build_gradient_bo
 from agentic_automl.regression.models.linear_regression import build_linear_regression
 from agentic_automl.regression.models.random_forest import build_random_forest
 from agentic_automl.regression.models.ridge import build_ridge
+from agentic_automl.regression.random_search import SEARCH_SPACES
 from agentic_automl.regression.validation import cross_validation_scores
 
 
@@ -175,4 +176,68 @@ def test_final_date_boundary_cannot_split_same_day() -> None:
     with pytest.raises(ValueError, match="whole dates"):
         compare_regression_models(
             features, target, test_size=0.3, shuffle=False, dates=dates
+        )
+
+
+def test_temporal_random_search_uses_same_training_only_folds(monkeypatch) -> None:
+    features, target = pd.DataFrame({"value": range(24)}), pd.Series(range(24))
+    dates = pd.Series(pd.date_range("2020-01-01", periods=8).repeat(3))
+    monkeypatch.setitem(
+        SEARCH_SPACES, "gradient_boosting", {"estimator__n_estimators": [10]}
+    )
+    with (
+        patch(
+            "agentic_automl.regression.comparison.cross_validation_scores",
+            wraps=cross_validation_scores,
+        ) as defaults,
+        patch(
+            "agentic_automl.regression.random_search.cross_validation_scores",
+            wraps=cross_validation_scores,
+        ) as search,
+    ):
+        table = compare_regression_models(
+            features,
+            target,
+            shuffle=False,
+            dates=dates,
+            test_size=6,
+            model_names=["gradient_boosting"],
+            random_search_trials=1,
+        )
+    assert defaults.call_count == 2  # Baseline and selected default only.
+    assert search.call_count == 1
+    call = search.call_args
+    pd.testing.assert_frame_equal(call.args[1], features.iloc[:18])
+    assert call.args[3] is defaults.call_args.args[3]
+    for train, valid in call.args[3]:
+        assert dates.iloc[train].max() < dates.iloc[valid].min()
+    assert table.index.tolist() == [
+        "mean_baseline",
+        "gradient_boosting",
+        "gradient_boosting_random_search",
+    ]
+    assert len(table.attrs["random_search"]["gradient_boosting"]["trials"]) == 1
+    assert table.filter(regex="^test_").notna().any(axis=1).sum() == 1
+
+
+def test_excluded_regressors_are_not_built() -> None:
+    with patch(
+        "agentic_automl.regression.comparison.build_random_forest",
+        side_effect=AssertionError("Excluded"),
+    ):
+        table = compare_regression_models(
+            pd.DataFrame({"value": range(30)}),
+            pd.Series(range(30)),
+            model_names=["ridge"],
+        )
+    assert table.index.tolist() == ["mean_baseline", "ridge"]
+
+
+@pytest.mark.parametrize("selection", [[], ["unknown"], ["ridge", "ridge"]])
+def test_invalid_regression_model_selection_is_rejected(selection: list[str]) -> None:
+    with pytest.raises(ValueError, match="regressor"):
+        compare_regression_models(
+            pd.DataFrame({"value": range(30)}),
+            pd.Series(range(30)),
+            model_names=selection,
         )

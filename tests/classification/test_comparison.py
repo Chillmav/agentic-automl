@@ -180,3 +180,91 @@ def test_only_cv_winner_predicts_test_rows_with_deterministic_ties(
     test_scores = table.filter(like="test_")
     assert test_scores.notna().all(axis=1).sum() == 1
     assert test_scores.drop(index=table.attrs["selected_model"]).isna().all().all()
+
+
+def test_random_search_uses_only_development_rows_and_existing_folds() -> None:
+    features = pd.DataFrame({"signal": [0] * 40 + [1] * 40})
+    target = pd.Series(["no"] * 40 + ["yes"] * 40)
+    train_x, _, train_y, _ = stratified_split(features, target)
+    with (
+        patch(
+            "agentic_automl.classification.random_search.cross_validation_scores",
+            wraps=cross_validation_scores,
+        ) as search_cv,
+        patch(
+            "agentic_automl.classification.comparison.cross_validation_scores",
+            wraps=cross_validation_scores,
+        ) as default_cv,
+    ):
+        table = compare_classification_models(
+            features,
+            target,
+            positive_class="yes",
+            random_search_trials=2,
+            model_names=["random_forest"],
+        )
+    assert (
+        search_cv.call_count == 1
+    )  # The sampled default reuses its existing CV scores.
+    assert default_cv.call_count == 3  # Two baselines and one fixed-default classifier.
+    folds = default_cv.call_args_list[0].args[4]
+    for call in search_cv.call_args_list:
+        pd.testing.assert_frame_equal(call.args[1], train_x)
+        pd.testing.assert_series_equal(call.args[2], train_y)
+        assert call.args[4] is folds
+    assert table.shape == (4, 12)
+    assert (
+        table.attrs["selected_model"] == "random_forest"
+    )  # Default comparison order breaks ties.
+    assert len(table.attrs["random_search"]["random_forest"]["trials"]) == 2
+    best = max(
+        table.attrs["random_search"]["random_forest"]["trials"],
+        key=lambda trial: trial["cv_f1_mean"],
+    )
+    assert table.loc["random_forest_random_search", "cv_f1_mean"] == best["cv_f1_mean"]
+    assert table.filter(regex="^test_").notna().any(axis=1).sum() == 1
+
+
+def test_search_runs_for_every_selected_classifier() -> None:
+    features = pd.DataFrame({"signal": [0] * 40 + [1] * 40})
+    target = pd.Series(["no"] * 40 + ["yes"] * 40)
+    table = compare_classification_models(
+        features, target, positive_class="yes", random_search_trials=1
+    )
+    assert len(table) == 12  # Two baselines, five defaults, five searched variants.
+    assert set(table.attrs["random_search"]) == {
+        "logistic_regression",
+        "knn",
+        "decision_tree",
+        "random_forest",
+        "svm",
+    }
+    assert all(
+        len(search["trials"]) == 1 for search in table.attrs["random_search"].values()
+    )
+    assert table.filter(regex="^test_").notna().any(axis=1).sum() == 1
+
+
+def test_excluded_models_are_not_built_and_knn_constraint_does_not_apply() -> None:
+    with patch(
+        "agentic_automl.classification.comparison.build_knn",
+        side_effect=AssertionError("KNN excluded"),
+    ):
+        table = compare_classification_models(
+            pd.DataFrame({"signal": [0, 1] * 4}),
+            pd.Series([0, 1] * 4),
+            positive_class=1,
+            model_names=["svm"],
+        )
+    assert table.index.tolist() == ["guessing_baseline", "majority_baseline", "svm"]
+
+
+@pytest.mark.parametrize("selection", [[], ["unknown"], ["svm", "svm"]])
+def test_invalid_model_selection_is_rejected(selection: list[str]) -> None:
+    with pytest.raises(ValueError, match="classifier"):
+        compare_classification_models(
+            pd.DataFrame({"value": range(20)}),
+            pd.Series([0, 1] * 10),
+            positive_class=1,
+            model_names=selection,
+        )
