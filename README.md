@@ -1,66 +1,77 @@
 # Agentic AutoML
 
-An experimental platform for budgeted tabular ML. The first step is a local,
-reproducible binary classification experiment with **zero LLM/API cost**.
+Tabular binary classification and regression experiments using scikit-learn.
 
-## Setup and run
+## Run the local web interface
 
-Python 3.12 is the initial supported environment. From the repository root:
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m agentic_automl data.csv \
-  --target outcome --positive-class yes --output /tmp/automl-run-001
-```
-
-Use the exact positive label from your CSV (for example `1` or `yes`). Target
-labels are read as strings. Missing target labels, nonbinary targets, and datasets
-with fewer than five examples per class are rejected. Features may contain missing
-values. Inputs must have independent rows; temporal/grouped data and identifier
-or leakage columns must be handled by the researcher before running.
-
-The experiment uses an 80/20 stratified development/holdout split and shared
-3-fold stratified CV within development data. Numeric columns receive median
-imputation and scaling; categorical columns receive mode imputation and one-hot
-encoding with at most 32 categories per column. Preprocessing is fitted inside
-each fold. A dummy classifier and logistic regression compete on mean CV ROC-AUC.
-Boolean feature columns pass through as binary values.
-Ties prefer the first candidate (dummy). Only the winner is fitted on all
-development rows and evaluated on holdout. The exported pipeline retains this
-development-data fit so its holdout result remains attributable to that artifact.
-
-Each new output directory contains:
-
-- `report.json`: CV fold scores, mean/std, winner, holdout ROC-AUC, average precision,
-  balanced accuracy, F1, elapsed time, and zero LLM cost.
-- `pipeline.joblib`: fitted preprocessing and classifier; probabilities in column 1
-  refer to the explicitly chosen positive class. Load only trusted joblib files.
-- `manifest.json`: dataset SHA-256, class mapping, feature schema, exact split/fold
-  row positions, seed, pipeline parameters, Python and dependency versions.
-
-Row indices are zero-based positions in the parsed CSV. The same file, pinned
-environment, and seed (`42` by default) reproduce splits and scores; exact timings
-and cross-platform bitwise equality are not guaranteed. Preserve the original CSV
-and the source revision alongside artifacts for future replay. Existing output
-directories are refused, never overwritten. Failed writes can leave a partial
-directory; rerun using a new output path.
-
-## Validation
+From the project directory:
 
 ```bash
-.venv/bin/python -m pytest
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn agentic_automl.api:app --reload
 ```
 
-## Next steps and cost
+Open **http://127.0.0.1:8000** to see experiment history. Click **New experiment**
+to choose a CSV, enter its target column, select
+models, and run. For classification, enter the exact positive label (for example,
+`1` or `yes`). Uploads must be CSV text, even if the filename ends in `.xls`.
+The upload limit is 25 MB; at most 10,000 rows are sampled with seed 42.
 
-Next add random search and Optuna using this same evaluation policy, then a bounded
-LangGraph planner. Future agent experiments should start with an estimated USD
-0.05/run LLM budget, configurable downward or disabled; pricing/token accounting and
-budget enforcement must be implemented before paid calls are enabled. This first
-step makes no network calls and uses no paid services. CPU time and memory are not
-yet hard-limited. Start with small datasets.
+The page shows three-fold CV averages and a separate table for the winner's final
+test scores. Classification selects by F1; regression selects by lowest MSE.
+Baselines are always included. Parameter search is disabled in this interface.
 
-See [architecture decisions](docs/architecture.md) for scope and expansion boundaries.
+Click a dataset filename in History (or **View experiment details** after a run)
+to open `/experiments/{id}`. This page shows the saved configuration, all CV
+averages, the winner's test scores and rejected columns. It does not retrain models.
+Rejected-column counts come from the winning model's final training split;
+CV folds may reject different columns. Older records show **Not recorded** for
+this information, and baseline winners do not use feature preprocessing.
+
+Use independent observations: the web interface uses a random 80/20 train/test
+split. It does not expose the chronological split available in `main_regression.py`.
+Remove ID columns and target-leaking features before upload. Existing categorical
+preprocessing still rejects columns with more than 20 distinct training values.
+
+## How the web layer works
+
+1. `frontend/index.html` loads React, ReactDOM and Babel, and provides a root element.
+2. `frontend/app.js` contains `App` for new experiments, `ResultsTable` for scores,
+   `History` for past runs, and `ExperimentDetails` for a saved run. The HTML-like
+   syntax is JSX. Ordinary links switch between pages.
+3. `agentic_automl/api.py` validates the request and calls the existing ML pipeline.
+4. `agentic_automl/history.py` appends and reads saved results.
+
+FastAPI serves both the frontend and API, so startup stays the same. No Node.js,
+npm or separate frontend server is needed. React and Babel are loaded from pinned
+CDN URLs, so the browser needs internet access. Babel translates JSX in the browser;
+this keeps the development setup small. For deployment, replace browser compilation
+with a build step. See the [Babel standalone documentation](https://babeljs.io/docs/babel-standalone).
+
+API documentation is at **http://127.0.0.1:8000/docs**.
+`GET /api/models` lists choices; `POST /api/experiments` accepts the form upload;
+`GET /api/experiments` returns saved runs, newest first.
+`GET /api/experiments/{id}` returns one saved run, or 404 if it does not exist.
+
+Experiments run synchronously: the browser waits for the response. Successful web
+runs are saved to **`results/experiments.jsonl`**, one JSON object per line, and
+remain available after browser or server restarts. Each entry stores a UTC date,
+dataset filename, task, target, chosen models, positive class, row count, CV averages
+and winner's test scores. New records also store rejected-column information.
+The history page displays dates in your browser's local
+time. Older experiments run before history was added are not available.
+
+The file is ignored by Git. This storage is for a single local server process;
+all visitors to that server share the same history. CLI runs are not recorded.
+Uploaded CSVs use temporary files removed after the run; neither CSV contents nor
+trained models are saved. This is a local development interface without authentication.
+The existing command-line experiment scripts continue to work.
+
+## Tests
+
+```bash
+pytest
+ruff check .
+ruff format --check .
+```

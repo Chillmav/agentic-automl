@@ -1,1 +1,1 @@
-"""Reproducible tabular ML, independent of agent orchestration."""
+"""Small, independent building blocks for tabular AutoML."""
