@@ -60,6 +60,7 @@ def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -
         "positive_class": "1",
         "selected_model": "logistic_regression",
         "selection_metric": "cv_f1_mean",
+        "rejected_columns": {},
         "sample_rows": 40,
         "duplicate_rows": 38,
     }

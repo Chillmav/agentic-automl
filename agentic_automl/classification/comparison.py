@@ -116,6 +116,11 @@ def compare_classification_models(
         selected_model=winner,
         selection_metric="cv_f1_mean",
     )
+    table.attrs["rejected_columns"] = (
+        models[winner].named_steps["preprocessor"].rejected_columns_
+        if hasattr(models[winner], "named_steps")
+        else {}
+    )
     if searches:
         table.attrs["random_search"] = searches
     return table
