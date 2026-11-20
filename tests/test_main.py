@@ -63,6 +63,21 @@ def test_runner_returns_tables_without_printing(tmp_path, monkeypatch, capsys) -
         "rejected_columns": {},
         "sample_rows": 40,
         "duplicate_rows": 38,
+        "training_profile": {
+            "scope": "outer_training_split",
+            "rows": 32,
+            "feature_count": 1,
+            "columns": [
+                {
+                    "name": "signal",
+                    "dtype": "int64",
+                    "missing_percent": 0.0,
+                    "distinct": 2,
+                    "numeric": {"min": 0.0, "max": 1.0, "mean": 0.5, "median": 0.5},
+                }
+            ],
+            "target": {"class_counts": {"0": 16, "1": 16}},
+        },
     }
     assert capsys.readouterr().out == ""
 

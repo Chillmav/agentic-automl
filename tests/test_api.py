@@ -1,3 +1,6 @@
+import json
+from unittest.mock import Mock
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -6,13 +9,6 @@ from agentic_automl.api import app
 from agentic_automl.history import save_experiment
 
 client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def isolated_history(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "agentic_automl.history.HISTORY_FILE", tmp_path / "history.jsonl"
-    )
 
 
 def test_frontend_and_model_choices() -> None:
@@ -99,10 +95,11 @@ def test_invalid_upload_returns_readable_error(csv, target, models, message) -> 
     assert client.get("/api/experiments").json() == []
 
 
-def test_upload_size_limit(monkeypatch) -> None:
+@pytest.mark.parametrize("endpoint", ["/api/experiments", "/api/dataset-review"])
+def test_upload_size_limit(monkeypatch, endpoint) -> None:
     monkeypatch.setattr("agentic_automl.api.MAX_UPLOAD_BYTES", 5)
     response = client.post(
-        "/api/experiments",
+        endpoint,
         data={"task": "regression", "target_column": "y", "model_names": ["ridge"]},
         files={"file": ("data.csv", "x,y\n1,2\n")},
     )
@@ -115,12 +112,12 @@ def test_empty_history() -> None:
 
 @pytest.mark.parametrize("endpoint", ["/api/experiments", "/api/experiments/some-id"])
 def test_unreadable_history_returns_error(tmp_path, endpoint) -> None:
-    path = tmp_path / "history.jsonl"
-    path.write_text("broken JSON\n", encoding="utf-8")
+    path = tmp_path / "history.sqlite3"
+    path.write_bytes(b"not a SQLite database")
     response = client.get(endpoint)
     assert response.status_code == 500
     assert "Could not read" in response.json()["detail"]
-    assert path.read_text(encoding="utf-8") == "broken JSON\n"
+    assert path.read_bytes() == b"not a SQLite database"
 
 
 def test_failed_save_is_reported(monkeypatch) -> None:
@@ -151,3 +148,118 @@ def test_details_preserve_old_records_without_rejected_columns() -> None:
     save_experiment({"id": "new", "dataset": "new.csv"})
     assert client.get("/api/experiments/old").json() == record
     assert "rejected_columns" not in client.get("/api/experiments/old").json()
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize(
+    "task,model",
+    [("classification", "logistic_regression"), ("regression", "linear_regression")],
+)
+def test_review_then_train_applies_changes_only_with_approval(
+    accepted, task, model
+) -> None:
+    csv = pd.DataFrame(
+        {
+            "x": range(100),
+            "date": pd.date_range("2024-01-01", periods=100).strftime("%Y-%m-%d"),
+            "y": [0] * 50 + [1] * 50,
+        }
+    ).to_csv(index=False)
+    fields = {"task": task, "target_column": "y", "model_names": [model]}
+    preview = client.post(
+        "/api/dataset-review", data=fields, files={"file": ("data.csv", csv)}
+    )
+    assert preview.status_code == 200
+    assert preview.json()["rows"] == 100
+    assert preview.json()["proposed_changes"][0]["kind"] == "expand_date"
+    assert client.get("/api/experiments").json() == []
+    result = client.post(
+        "/api/experiments",
+        data={**fields, "apply_suggestions": str(accepted)},
+        files={"file": ("data.csv", csv)},
+    )
+    assert result.status_code == 200, result.text
+    record = result.json()
+    review = record["dataset_review"]
+    assert review["accepted"] == accepted
+    assert review["applied_changes"] == (
+        preview.json()["proposed_changes"] if accepted else []
+    )
+    assert record["rejected_columns"] == ({} if accepted else {"date": 80})
+    assert (
+        client.get(f"/api/experiments/{record['id']}").json()["dataset_review"]
+        == review
+    )
+
+
+@pytest.mark.parametrize("accepted,status", [(False, 400), (True, 200)])
+def test_missing_targets_are_only_excluded_when_approved(accepted, status) -> None:
+    csv = "x,y\n" + "".join(f"{i},{i}\n" for i in range(50)) + "51,\n"
+    result = client.post(
+        "/api/experiments",
+        data={
+            "task": "regression",
+            "target_column": "y",
+            "model_names": ["linear_regression"],
+            "apply_suggestions": str(accepted),
+        },
+        files={"file": ("data.csv", csv)},
+    )
+    assert result.status_code == status, result.text
+    if accepted:
+        assert result.json()["dataset_review"]["prepared_rows"] == 50
+        assert result.json()["dataset_review"]["rows"] == 51
+    else:
+        assert client.get("/api/experiments").json() == []
+
+
+def test_analysis_is_user_triggered_and_does_not_change_history(monkeypatch) -> None:
+    report = {
+        "summary": "Review complete",
+        "findings": [],
+        "next_steps": ["Inspect IDs"],
+    }
+    reviewer = Mock(return_value=json.dumps(report))
+    monkeypatch.setattr(
+        "agentic_automl.agents.experiment_analyst.review_with_ollama", reviewer
+    )
+    record = {"id": "run", "task": "classification", "cv_results": []}
+    save_experiment(record)
+    assert client.get("/api/experiments/run").json() == record
+    reviewer.assert_not_called()
+    response = client.post("/api/experiments/run/analysis")
+    assert response.status_code == 200
+    saved = response.json()
+    assert {key: saved[key] for key in report} == report
+    assert saved["experiment_id"] == "run"
+    assert saved["model"]
+    assert saved["created_at"].endswith("+00:00")
+    reviewer.assert_called_once()
+    assert client.get("/api/experiments/run/analyses").json() == [
+        {**saved, "rejected": False}
+    ]
+    reviewer.assert_called_once()  # Reading stored reports never calls a model.
+    assert client.get("/api/experiments").json() == [record]
+
+
+@pytest.mark.parametrize(
+    "error,status",
+    [(RuntimeError("Start Ollama"), 503), (ValueError("invalid JSON"), 502)],
+)
+def test_analysis_failure_does_not_change_history(monkeypatch, error, status) -> None:
+    def fail_analysis(record: dict) -> dict:
+        raise error
+
+    monkeypatch.setattr("agentic_automl.api.analyze_experiment", fail_analysis)
+    record = {"id": "run", "task": "regression"}
+    save_experiment(record)
+    response = client.post("/api/experiments/run/analysis")
+    assert response.status_code == status
+    assert client.get("/api/experiments").json() == [record]
+
+
+def test_unknown_experiment_is_not_analyzed(monkeypatch) -> None:
+    analyze = Mock()
+    monkeypatch.setattr("agentic_automl.api.analyze_experiment", analyze)
+    assert client.post("/api/experiments/missing/analysis").status_code == 404
+    analyze.assert_not_called()

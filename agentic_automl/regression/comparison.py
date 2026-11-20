@@ -3,6 +3,7 @@ from sklearn.dummy import DummyRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
+from agentic_automl.profiling import training_profile
 from agentic_automl.regression.data import validate_regression_target
 from agentic_automl.regression.models.decision_tree import build_decision_tree
 from agentic_automl.regression.models.gradient_boosting import build_gradient_boosting
@@ -29,6 +30,7 @@ def compare_regression_models(
     *,
     random_search_trials: int = 0,
     model_names: list[str] | None = None,
+    evaluate_test: bool = True,
 ) -> pd.DataFrame:
     """Select by lowest mean CV MSE; test only the winner. Ordered dates stay together."""
     if random_search_trials < 0:
@@ -98,14 +100,15 @@ def compare_regression_models(
             }
     winner = min(results, key=lambda name: results[name]["cv_mse_mean"])
     models[winner].fit(train_x, train_y)
-    predictions = models[winner].predict(test_x)
     table = pd.DataFrame.from_dict(results, orient="index").rename_axis("model")
-    for metric, score in {
-        "test_mse": mean_squared_error(test_y, predictions),
-        "test_r2": r2_score(test_y, predictions),
-    }.items():
-        table[metric] = float("nan")
-        table.loc[winner, metric] = float(score)
+    if evaluate_test:
+        predictions = models[winner].predict(test_x)
+        for metric, score in {
+            "test_mse": mean_squared_error(test_y, predictions),
+            "test_r2": r2_score(test_y, predictions),
+        }.items():
+            table[metric] = float("nan")
+            table.loc[winner, metric] = float(score)
     table.attrs.update(selected_model=winner, selection_metric="cv_mse_mean")
     if searches:
         table.attrs["random_search"] = searches
@@ -114,4 +117,5 @@ def compare_regression_models(
         if hasattr(models[winner], "named_steps")
         else {}
     )
+    table.attrs["training_profile"] = training_profile(train_x, train_y, "regression")
     return table

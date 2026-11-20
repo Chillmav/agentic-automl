@@ -16,6 +16,7 @@ from agentic_automl.classification.random_search import (
     random_search_classifier,
 )
 from agentic_automl.classification.validation import cross_validation_scores
+from agentic_automl.profiling import training_profile
 
 
 def compare_classification_models(
@@ -27,6 +28,7 @@ def compare_classification_models(
     positive_class: str | int,
     random_search_trials: int = 0,
     model_names: list[str] | None = None,
+    evaluate_test: bool = True,
 ) -> pd.DataFrame:
     """Rank by mean CV F1, then evaluate only the winner on the separate test set."""
     if random_search_trials < 0:
@@ -98,19 +100,24 @@ def compare_classification_models(
     # max keeps the first model in comparison order when CV scores tie.
     winner = max(results, key=lambda name: results[name]["cv_f1_mean"])
     models[winner].fit(train_x, train_y)
-    predictions = models[winner].predict(test_x)
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        test_y, predictions, average="binary", pos_label=positive_class, zero_division=0
-    )
     table = pd.DataFrame.from_dict(results, orient="index").rename_axis("model")
-    for metric, score in {
-        "test_acc": accuracy_score(test_y, predictions),
-        "test_recall": recall,
-        "test_precision": precision,
-        "test_f1": f1,
-    }.items():
-        table[metric] = float("nan")
-        table.loc[winner, metric] = float(score)
+    if evaluate_test:
+        predictions = models[winner].predict(test_x)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            test_y,
+            predictions,
+            average="binary",
+            pos_label=positive_class,
+            zero_division=0,
+        )
+        for metric, score in {
+            "test_acc": accuracy_score(test_y, predictions),
+            "test_recall": recall,
+            "test_precision": precision,
+            "test_f1": f1,
+        }.items():
+            table[metric] = float("nan")
+            table.loc[winner, metric] = float(score)
     table.attrs.update(
         positive_class=positive_class,
         selected_model=winner,
@@ -120,6 +127,9 @@ def compare_classification_models(
         models[winner].named_steps["preprocessor"].rejected_columns_
         if hasattr(models[winner], "named_steps")
         else {}
+    )
+    table.attrs["training_profile"] = training_profile(
+        train_x, train_y, "classification"
     )
     if searches:
         table.attrs["random_search"] = searches
